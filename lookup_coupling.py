@@ -9,14 +9,54 @@ weight.  Results can be narrowed with an optional weight threshold and/or
 a limit on the number of results returned.
 
 Usage:
-    uv run lookup_coupling.py <file> [--coupling FILE] [--threshold FLOAT]
-                                     [--top N] [--show-weights]
+    uv run lookup_coupling.py <file> [--threshold FLOAT] [--top N] [--show-weights]
 """
 
 import argparse
 import json
+import subprocess
 import sys
 from pathlib import Path
+
+
+def _find_coupling_file(start: Path) -> Path:
+    """Locate the ``.logical-coupling`` file in the current git repository root.
+
+    Uses ``git rev-parse --show-toplevel`` to find the repo root, then
+    checks for a ``.logical-coupling`` file there.
+
+    Args:
+        start: Directory to run git from (typically cwd).
+
+    Returns:
+        Path to ``<git_root>/.logical-coupling``.
+
+    Raises:
+        SystemExit: If not inside a git repository, or if
+            ``.logical-coupling`` does not exist in the repo root.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=start,
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        print("error: not inside a git repository", file=sys.stderr)
+        sys.exit(1)
+
+    repo_root = Path(result.stdout.strip())
+    coupling_file = repo_root / ".logical-coupling"
+
+    if not coupling_file.exists():
+        print(
+            "error: coupling data not found. "
+            f"Please run 'uv run index.py {repo_root}' first.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+
+    return coupling_file
 
 
 def load_coupling(path: Path) -> dict[str, dict[str, float]]:
@@ -110,14 +150,6 @@ def main() -> None:
         help="File path to look up in the coupling map.",
     )
     parser.add_argument(
-        "-c",
-        "--coupling",
-        type=Path,
-        default=Path("coupling.json"),
-        metavar="FILE",
-        help="Path to the coupling JSON file. (default: coupling.json)",
-    )
-    parser.add_argument(
         "--threshold",
         type=_non_negative_float,
         default=None,
@@ -139,13 +171,14 @@ def main() -> None:
 
     args = parser.parse_args()
 
-    coupling = load_coupling(args.coupling)
+    coupling_path = _find_coupling_file(Path.cwd())
+    coupling = load_coupling(coupling_path)
 
     try:
         results = query(coupling, args.file, args.threshold, args.top)
     except KeyError:
         print(
-            f"error: '{args.file}' not found in coupling map {args.coupling}",
+            f"error: '{args.file}' not found in coupling map {coupling_path}",
             file=sys.stderr,
         )
         sys.exit(1)

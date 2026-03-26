@@ -320,14 +320,6 @@ def main() -> None:
         help="Path to the root of the git repository to analyse.",
     )
     parser.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        default=None,
-        metavar="FILE",
-        help="Write JSON output to FILE instead of stdout.",
-    )
-    parser.add_argument(
         "--normalization",
         choices=["max", "row"],
         default="max",
@@ -369,7 +361,7 @@ def main() -> None:
         for file_a, neighbors in sorted(coupling.items())
     }
 
-    output_path: Path = args.output if args.output is not None else Path(f"{repo_path.name}.json")
+    output_path: Path = repo_path / ".logical-coupling"
     output_path.write_text(json.dumps(sorted_coupling, indent=2), encoding="utf-8")
     print(f"Wrote coupling data to {output_path}")
 
