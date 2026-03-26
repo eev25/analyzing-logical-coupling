@@ -9,7 +9,7 @@ weight.  Results can be narrowed with an optional weight threshold and/or
 a limit on the number of results returned.
 
 Usage:
-    uv run lookup_coupling.py <file> [--threshold FLOAT] [--top N] [--show-weights]
+    uv run coupling.py <file> [--threshold FLOAT] [--top N] [--show-weights]
 """
 
 import argparse
@@ -32,8 +32,8 @@ def _find_coupling_file(start: Path) -> Path:
         Path to ``<git_root>/.logical-coupling``.
 
     Raises:
-        SystemExit: If not inside a git repository, or if
-            ``.logical-coupling`` does not exist in the repo root.
+        SystemExit: If not inside a git repository, or if auto-generation
+            of ``.logical-coupling`` fails.
     """
     result = subprocess.run(
         ["git", "rev-parse", "--show-toplevel"],
@@ -49,12 +49,15 @@ def _find_coupling_file(start: Path) -> Path:
     coupling_file = repo_root / ".logical-coupling"
 
     if not coupling_file.exists():
-        print(
-            "error: coupling data not found. "
-            f"Please run 'uv run index.py {repo_root}' first.",
-            file=sys.stderr,
+        print("Coupling data not found. Generating now...", file=sys.stderr)
+        index_script = Path(__file__).parent / "index.py"
+        gen = subprocess.run(
+            [sys.executable, str(index_script)],
+            cwd=repo_root,
         )
-        sys.exit(1)
+        if gen.returncode != 0:
+            print("error: failed to generate coupling data.", file=sys.stderr)
+            sys.exit(1)
 
     return coupling_file
 
@@ -137,7 +140,7 @@ def _positive_int(value: str) -> int:
 def main() -> None:
     """CLI entry point: parse args, load coupling map, query, print results."""
     parser = argparse.ArgumentParser(
-        prog="lookup_coupling.py",
+        prog="coupling.py",
         description=(
             "Query a precomputed file coupling map.\n\n"
             "Prints files that are historically coupled to the given file, "
