@@ -315,11 +315,6 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument(
-        "repo_path",
-        type=Path,
-        help="Path to the root of the git repository to analyse.",
-    )
-    parser.add_argument(
         "--normalization",
         choices=["max", "row"],
         default="max",
@@ -333,10 +328,17 @@ def main() -> None:
     )
 
     args = parser.parse_args()
-    repo_path: Path = args.repo_path.resolve()
 
-    if not repo_path.is_dir():
-        parser.error(f"repo_path does not exist or is not a directory: {repo_path}")
+    result = subprocess.run(
+        ["git", "rev-parse", "--show-toplevel"],
+        cwd=Path.cwd(),
+        capture_output=True,
+        text=True,
+    )
+    if result.returncode != 0:
+        parser.error("not inside a git repository")
+
+    repo_path = Path(result.stdout.strip())
 
     try:
         commit_file_sets = extract_commit_file_sets(repo_path)
