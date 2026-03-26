@@ -89,16 +89,45 @@ def _filter_binary(files: list[str]) -> set[str]:
     return {f for f in files if Path(f).suffix.lower() not in BINARY_EXTENSIONS}
 
 
+def _apply_rename(old: str, new: str, rename_map: dict[str, str]) -> None:
+    """Record a rename and collapse all existing pointers to the new name.
+
+    Maintains the invariant that every key in ``rename_map`` maps directly
+    to the current canonical name — no chains.  When ``old`` is itself the
+    result of a prior rename, all previously established mappings that
+    pointed to its canonical form are updated too.
+
+    Example — two sequential renames a→b then b→c:
+        After first call:  {"a": "b"}
+        After second call: {"a": "c", "b": "c"}
+
+    A subsequent ``rename_map.get(path, path)`` is therefore always O(1).
+    """
+    old_canonical = rename_map.get(old, old)
+    for k in list(rename_map):
+        if rename_map[k] == old_canonical:
+            rename_map[k] = new
+    rename_map[old_canonical] = new
+
+
 def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
     """Run a single git-log call and return one file-set per commit.
 
     Executes::
 
-        git log --name-only --pretty=format:COMMIT:%h
+        git log --reverse --name-status -M --pretty=format:COMMIT:%h
 
     in *repo_path* and parses the output into a list of sets.  Each set
     contains the source filenames (relative to the repo root) touched by
-    one commit, with binary files already removed.
+    one commit, with binary files already removed and all paths resolved to
+    their current canonical name via rename tracking.
+
+    Commits are processed oldest-first (``--reverse``) so that each rename
+    is encountered before any later commit that references the new name.
+    A ``rename_map`` is maintained across commits: whenever a rename
+    ``old → new`` is detected, every previously recorded path that resolved
+    to ``old`` is updated to point to ``new`` instead, preserving a flat
+    (no-chain) lookup structure.
 
     Commits that produce an empty set (e.g. merge commits with no file
     changes) are included; callers are responsible for filtering by
@@ -108,14 +137,15 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
         repo_path: Path to the root of the git repository.
 
     Returns:
-        A list of sets, one per commit, newest-first (git log order).
+        A list of sets, one per commit, oldest-first.  Each set contains
+        only source-file paths resolved to their current canonical names.
 
     Raises:
         subprocess.CalledProcessError: If git exits non-zero.
         FileNotFoundError: If git is not on PATH.
     """
     result = subprocess.run(
-        ["git", "log", "--name-only", "--pretty=format:COMMIT:%h"],
+        ["git", "log", "--reverse", "--name-status", "-M", "--pretty=format:COMMIT:%h"],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -124,6 +154,7 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
 
     commit_file_sets: list[set[str]] = []
     current_files: list[str] = []
+    rename_map: dict[str, str] = {}
     in_commit = False
 
     for line in result.stdout.splitlines():
@@ -133,13 +164,33 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
             current_files = []
             in_commit = True
         elif line:
-            # Non-empty, non-COMMIT line is a filename.
-            current_files.append(line)
+            parts = line.split("\t")
+            status = parts[0]
+            if status.startswith("R"):
+                # Rename: R<score>\t<old_path>\t<new_path>
+                old_path, new_path = parts[1], parts[2]
+                _apply_rename(old_path, new_path, rename_map)
+                current_files.append(new_path)
+            elif status.startswith("C"):
+                # Copy: source still exists; only the new path participates.
+                current_files.append(parts[2])
+            else:
+                # M, A, D, T, U, etc. — single path in parts[1].
+                current_files.append(rename_map.get(parts[1], parts[1]))
         # Blank lines are separators — silently ignored.
 
     if in_commit:
         # Flush the final commit (no trailing COMMIT: line follows it).
         commit_file_sets.append(_filter_binary(current_files))
+
+    # Re-apply the final rename_map to all already-flushed sets.  Without
+    # this pass, file sets flushed before a rename was encountered keep the
+    # intermediate name, producing stale nodes in the coupling graph.
+    if rename_map:
+        commit_file_sets = [
+            {rename_map.get(f, f) for f in fs}
+            for fs in commit_file_sets
+        ]
 
     return commit_file_sets
 
