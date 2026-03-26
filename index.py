@@ -183,6 +183,39 @@ def compute_coupling(
     return {k: dict(v) for k, v in coupling.items()}
 
 
+def normalize_coupling(
+    coupling: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Row-normalize coupling weights so each file's weights sum to 1.
+
+    For each file A:
+        total = sum(W(A, B) for all B)
+        W_norm(A, B) = W(A, B) / total
+
+    This converts raw accumulated weights into relative coupling strengths,
+    interpretable as: "given file A changes, how likely is file B to also
+    change?"
+
+    Files with a total weight of zero are excluded from the output
+    (defensive; should not occur given :func:`compute_coupling`'s output).
+
+    Args:
+        coupling: Raw weights as returned by :func:`compute_coupling`.
+
+    Returns:
+        A new two-level dict with the same structure, values in [0, 1],
+        where each row sums to 1.0.
+    """
+    return {
+        file_a: {
+            file_b: w / total
+            for file_b, w in neighbors.items()
+        }
+        for file_a, neighbors in coupling.items()
+        if (total := sum(neighbors.values())) > 0
+    }
+
+
 def main() -> None:
     """CLI entry point: parse args, orchestrate, emit JSON to stdout."""
     parser = argparse.ArgumentParser(
@@ -226,7 +259,7 @@ def main() -> None:
             f"stderr: {exc.stderr.strip()}"
         )
 
-    coupling = compute_coupling(commit_file_sets)
+    coupling = normalize_coupling(compute_coupling(commit_file_sets))
 
     # Sort outer keys alphabetically; sort each file's neighbours by weight
     # descending so the strongest couplings appear first.
