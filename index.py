@@ -115,12 +115,16 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
 
     Executes::
 
-        git log --reverse --name-status -M --pretty=format:COMMIT:%h
+        git log --reverse --no-merges --name-status -M --pretty=format:COMMIT:%h
 
     in *repo_path* and parses the output into a list of sets.  Each set
     contains the source filenames (relative to the repo root) touched by
     one commit, with binary files already removed and all paths resolved to
     their current canonical name via rename tracking.
+
+    Merge commits (those with more than one parent) are excluded via
+    ``--no-merges``.  Including them would double-count file pairs already
+    accumulated from the individual commits being merged.
 
     Commits are processed oldest-first (``--reverse``) so that each rename
     is encountered before any later commit that references the new name.
@@ -129,9 +133,8 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
     to ``old`` is updated to point to ``new`` instead, preserving a flat
     (no-chain) lookup structure.
 
-    Commits that produce an empty set (e.g. merge commits with no file
-    changes) are included; callers are responsible for filtering by
-    cardinality.
+    Commits that produce an empty set are included; callers are responsible
+    for filtering by cardinality.
 
     Args:
         repo_path: Path to the root of the git repository.
@@ -145,7 +148,7 @@ def extract_commit_file_sets(repo_path: Path) -> list[set[str]]:
         FileNotFoundError: If git is not on PATH.
     """
     result = subprocess.run(
-        ["git", "log", "--reverse", "--name-status", "-M", "--pretty=format:COMMIT:%h"],
+        ["git", "log", "--reverse", "--no-merges", "--name-status", "-M", "--pretty=format:COMMIT:%h"],
         cwd=repo_path,
         capture_output=True,
         text=True,
@@ -310,7 +313,8 @@ def main() -> None:
             f"stderr: {exc.stderr.strip()}"
         )
 
-    coupling = normalize_coupling(compute_coupling(commit_file_sets))
+    #coupling = normalize_coupling(compute_coupling(commit_file_sets))
+    coupling = compute_coupling(commit_file_sets)
 
     # Sort outer keys alphabetically; sort each file's neighbours by weight
     # descending so the strongest couplings appear first.
