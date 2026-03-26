@@ -237,7 +237,7 @@ def compute_coupling(
     return {k: dict(v) for k, v in coupling.items()}
 
 
-def normalize_coupling(
+def normalize_coupling_row(
     coupling: dict[str, dict[str, float]],
 ) -> dict[str, dict[str, float]]:
     """Row-normalize coupling weights so each file's weights sum to 1.
@@ -270,6 +270,38 @@ def normalize_coupling(
     }
 
 
+def normalize_coupling_max(
+    coupling: dict[str, dict[str, float]],
+) -> dict[str, dict[str, float]]:
+    """Normalize coupling weights relative to each file's strongest coupling.
+
+    For each file A:
+        max_weight = max(W(A, B) for all B)
+        W_max(A, B) = W(A, B) / max_weight
+
+    The strongest coupling for any file is always 1.0; all others fall in
+    [0, 1].  This highlights the dominant relationship per file and makes
+    relative coupling strengths easy to compare at a glance.
+
+    Files with no neighbours are excluded from the output (defensive;
+    should not occur given :func:`compute_coupling`'s output).
+
+    Args:
+        coupling: Raw weights as returned by :func:`compute_coupling`.
+
+    Returns:
+        A new two-level dict with the same structure, values in [0, 1].
+    """
+    return {
+        file_a: {
+            file_b: w / max_weight
+            for file_b, w in neighbors.items()
+        }
+        for file_a, neighbors in coupling.items()
+        if (max_weight := max(neighbors.values(), default=0.0)) > 0
+    }
+
+
 def main() -> None:
     """CLI entry point: parse args, orchestrate, emit JSON to stdout."""
     parser = argparse.ArgumentParser(
@@ -295,6 +327,18 @@ def main() -> None:
         metavar="FILE",
         help="Write JSON output to FILE instead of stdout.",
     )
+    parser.add_argument(
+        "--normalization",
+        choices=["max", "row"],
+        default="max",
+        help=(
+            "Normalization strategy for coupling weights. "
+            "'max' (default): scale each file's weights by its strongest coupling — "
+            "range [0, 1], strongest pair is always 1.0. "
+            "'row': scale so each file's weights sum to 1.0 — "
+            "interpretable as co-change probability."
+        ),
+    )
 
     args = parser.parse_args()
     repo_path: Path = args.repo_path.resolve()
@@ -313,8 +357,8 @@ def main() -> None:
             f"stderr: {exc.stderr.strip()}"
         )
 
-    #coupling = normalize_coupling(compute_coupling(commit_file_sets))
-    coupling = compute_coupling(commit_file_sets)
+    normalizer = normalize_coupling_max if args.normalization == "max" else normalize_coupling_row
+    coupling = normalizer(compute_coupling(commit_file_sets))
 
     # Sort outer keys alphabetically; sort each file's neighbours by weight
     # descending so the strongest couplings appear first.
